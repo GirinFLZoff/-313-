@@ -1,0 +1,576 @@
+import tkinter as tk
+from tkinter import messagebox
+import sqlite3
+import hashlib
+from datetime import datetime, timedelta
+
+
+# Создание базы данных
+def create_database():
+    conn = sqlite3.connect('game_system.db')
+    c = conn.cursor()
+
+    # Таблица пользователей
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT DEFAULT 'user'
+    )''')
+
+    # Таблица игровых сессий
+    c.execute('''CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        start_time TEXT,
+        end_time TEXT,
+        score INTEGER,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )''')
+
+    # Таблица покупок
+    c.execute('''CREATE TABLE IF NOT EXISTS purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        item_name TEXT NOT NULL,
+        purchase_date TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )''')
+
+    conn.commit()
+    conn.close()
+
+
+# Авторизация
+def login():
+    def authenticate():
+        email = entry_email.get()
+        password = entry_password.get()
+
+        if not email or not password:
+            messagebox.showerror("Ошибка", "Пожалуйста, введите email и пароль.")
+            return
+
+        hashed_password = hashlib.sha256(password.encode()).hexdigest()
+
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE email=? AND password=?", (email, hashed_password))
+        user = c.fetchone()
+        conn.close()
+
+        if user:
+            messagebox.showinfo("Успех", "Вход успешен!")
+            login_window.destroy()
+            main_menu(user[0])  # Переход в главное меню
+        else:
+            messagebox.showerror("Ошибка", "Неверный email или пароль.")
+
+    login_window = tk.Tk()
+    login_window.title("Вход")
+
+    tk.Label(login_window, text="Email:", font=("Arial", 12)).pack(pady=10)
+    entry_email = tk.Entry(login_window, font=("Arial", 12))
+    entry_email.pack(pady=10)
+
+    tk.Label(login_window, text="Пароль:", font=("Arial", 12)).pack(pady=10)
+    entry_password = tk.Entry(login_window, show="*", font=("Arial", 12))
+    entry_password.pack(pady=10)
+
+    tk.Button(login_window, text="Войти", command=authenticate, font=("Arial", 12)).pack(pady=20)
+
+    login_window.mainloop()
+
+
+# Главное меню
+def main_menu(user_id):
+    # Извлекаем имя пользователя
+    conn = sqlite3.connect('game_system.db')
+    c = conn.cursor()
+    c.execute("SELECT name FROM users WHERE id=?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+
+    user_name = user[0] if user else "Гость"
+
+    def calculate_total_time():
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT start_time, end_time FROM sessions WHERE user_id=?", (user_id,))
+        sessions = c.fetchall()
+        conn.close()
+
+        total_time = timedelta()
+        for start, end in sessions:
+            if start and end:
+                start_dt = datetime.strptime(start, '%Y-%m-%d %H:%M:%S')
+                end_dt = datetime.strptime(end, '%Y-%m-%d %H:%M:%S')
+                total_time += end_dt - start_dt
+        return total_time
+
+    def refresh_menu():
+        menu_window.destroy()
+        main_menu(user_id)
+
+    def start_game():
+        start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO sessions (user_id, start_time) VALUES (?, ?)", (user_id, start_time))
+        session_id = c.lastrowid
+        conn.commit()
+        conn.close()
+
+        game_session_menu(session_id)
+
+    def game_session_menu(session_id):
+        def end_game():
+            end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            conn = sqlite3.connect('game_system.db')
+            c = conn.cursor()
+            c.execute("UPDATE sessions SET end_time=? WHERE id=?", (end_time, session_id))
+            conn.commit()
+            conn.close()
+            session_window.destroy()
+
+        session_window = tk.Toplevel()
+        session_window.title("Игровая сессия")
+
+        tk.Label(session_window, text="Игра запущена!", font=("Arial", 14)).pack(pady=20)
+        tk.Button(session_window, text="Завершить игру", command=end_game, font=("Arial", 12)).pack(pady=20)
+        session_window.mainloop()
+
+    def show_sessions():
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT start_time, end_time FROM sessions WHERE user_id=?", (user_id,))
+        sessions = c.fetchall()
+        conn.close()
+
+        sessions_window = tk.Toplevel()
+        sessions_window.title("История Сессий")
+
+        tk.Label(sessions_window, text="История сессий:", font=("Arial", 14)).pack(pady=10)
+        for start, end in sessions:
+            session_text = f"Начало: {start}, Завершение: {end}" if end else f"Начало: {start} (Активно)"
+            tk.Label(sessions_window, text=session_text, font=("Arial", 12)).pack(pady=5)
+
+    def open_shop():
+        def buy_currency():
+            def make_purchase(amount):
+                conn = sqlite3.connect('game_system.db')
+                c = conn.cursor()
+                c.execute("INSERT INTO purchases (user_id, item_name, purchase_date) VALUES (?, ?, ?)",
+                          (user_id, f"Валюта {amount}", datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                conn.commit()
+                conn.close()
+                messagebox.showinfo("Покупка", f"Вы приобрели {amount} валюты!")
+                currency_window.destroy()
+
+            currency_window = tk.Toplevel()
+            currency_window.title("Покупка валюты")
+
+            tk.Label(currency_window, text="Выберите количество валюты:", font=("Arial", 14)).pack(pady=10)
+            for amount in [60, 80, 160, 330, 600, 880, 1330]:
+                tk.Button(currency_window, text=f"{amount} валюты", command=lambda a=amount: make_purchase(a),
+                          font=("Arial", 12)).pack(pady=5)
+
+        def buy_premium():
+            def make_purchase(duration):
+                conn = sqlite3.connect('game_system.db')
+                c = conn.cursor()
+                c.execute("INSERT INTO purchases (user_id, item_name, purchase_date) VALUES (?, ?, ?)",
+                          (user_id, f"Премиум {duration}", datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                conn.commit()
+                conn.close()
+                messagebox.showinfo("Покупка", f"Вы приобрели премиум на {duration}!")
+                premium_window.destroy()
+
+            premium_window = tk.Toplevel()
+            premium_window.title("Покупка премиума")
+
+            tk.Label(premium_window, text="Выберите длительность премиума:", font=("Arial", 14)).pack(pady=10)
+            for duration in ["1d", "3d", "7d", "15d", "30d", "75d", "130d"]:
+                tk.Button(premium_window, text=f"{duration}", command=lambda d=duration: make_purchase(d),
+                          font=("Arial", 12)).pack(pady=5)
+
+        shop_window = tk.Toplevel()
+        shop_window.title("Магазин")
+
+        tk.Label(shop_window, text="Магазин:", font=("Arial", 14)).pack(pady=10)
+        tk.Button(shop_window, text="Купить Валюту", command=buy_currency, font=("Arial", 12)).pack(pady=5)
+        tk.Button(shop_window, text="Купить Премиум", command=buy_premium, font=("Arial", 12)).pack(pady=5)
+
+    def show_purchases():
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT item_name, purchase_date FROM purchases WHERE user_id=?", (user_id,))
+        purchases = c.fetchall()
+        conn.close()
+
+        purchases_window = tk.Toplevel()
+        purchases_window.title("История Покупок")
+
+        tk.Label(purchases_window, text="История покупок:", font=("Arial", 14)).pack(pady=10)
+        for item, date in purchases:
+            tk.Label(purchases_window, text=f"{item} - {date}", font=("Arial", 12)).pack(pady=5)
+
+    def admin_login():
+        def check_admin_password():
+            admin_password = entry_admin_password.get()
+
+            if admin_password == "rfvtgb24":  # Пароль администратора
+                messagebox.showinfo("Админ", "Вход в админ-панель успешен!")
+                admin_window.destroy()
+                admin_panel()
+            else:
+                messagebox.showerror("Ошибка", "Неверный пароль администратора.")
+
+        admin_window = tk.Toplevel()
+        admin_window.title("Вход в админ-панель")
+
+        tk.Label(admin_window, text="Пароль администратора:", font=("Arial", 12)).pack(pady=10)
+        entry_admin_password = tk.Entry(admin_window, show="*", font=("Arial", 12))
+        entry_admin_password.pack(pady=10)
+
+        tk.Button(admin_window, text="Войти", command=check_admin_password, font=("Arial", 12)).pack(pady=20)
+
+    def admin_panel():
+        admin_panel_window = tk.Toplevel()
+        admin_panel_window.title("Админ-панель")
+
+        tk.Label(admin_panel_window, text="Добро пожаловать в админ-панель!", font=("Arial", 16)).pack(pady=10)
+
+        def view_all_users():
+            conn = sqlite3.connect('game_system.db')
+            c = conn.cursor()
+            c.execute("SELECT id, name, email, role FROM users")
+            users = c.fetchall()
+            conn.close()
+
+            users_window = tk.Toplevel()
+            users_window.title("Все пользователи")
+
+            tk.Label(users_window, text="Список всех пользователей:", font=("Arial", 14)).pack(pady=10)
+            for user in users:
+                user_info = f"ID: {user[0]}, Имя: {user[1]}, Email: {user[2]}, Роль: {user[3]}"
+                tk.Label(users_window, text=user_info, font=("Arial", 12)).pack(pady=5)
+
+        def delete_user():
+            def confirm_delete():
+                user_id = entry_user_id.get()
+                if not user_id.isdigit():
+                    messagebox.showerror("Ошибка", "Введите корректный ID пользователя.")
+                    return
+
+                conn = sqlite3.connect('game_system.db')
+                c = conn.cursor()
+                c.execute("DELETE FROM users WHERE id=?", (user_id,))
+                c.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+                c.execute("DELETE FROM purchases WHERE user_id=?", (user_id,))
+                conn.commit()
+                conn.close()
+                messagebox.showinfo("Успех", f"Пользователь с ID {user_id} удален.")
+                delete_window.destroy()
+
+            delete_window = tk.Toplevel()
+            delete_window.title("Удалить пользователя")
+
+            tk.Label(delete_window, text="Введите ID пользователя для удаления:", font=("Arial", 12)).pack(pady=10)
+            entry_user_id = tk.Entry(delete_window, font=("Arial", 12))
+            entry_user_id.pack(pady=10)
+            tk.Button(delete_window, text="Удалить", command=confirm_delete, font=("Arial", 12)).pack(pady=20)
+
+        def reset_user():
+            def confirm_reset():
+                user_id = entry_user_id.get()
+                if not user_id.isdigit():
+                    messagebox.showerror("Ошибка", "Введите корректный ID пользователя.")
+                    return
+
+                conn = sqlite3.connect('game_system.db')
+                c = conn.cursor()
+                c.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+                c.execute("DELETE FROM purchases WHERE user_id=?", (user_id,))
+                conn.commit()
+                conn.close()
+                messagebox.showinfo("Успех", f"Данные пользователя с ID {user_id} обнулены.")
+                reset_window.destroy()
+
+            reset_window = tk.Toplevel()
+            reset_window.title("Обнулить пользователя")
+
+            tk.Label(reset_window, text="Введите ID пользователя для обнуления:", font=("Arial", 12)).pack(pady=10)
+            entry_user_id = tk.Entry(reset_window, font=("Arial", 12))
+            entry_user_id.pack(pady=10)
+            tk.Button(reset_window, text="Обнулить", command=confirm_reset, font=("Arial", 12)).pack(pady=20)
+
+        def sort_users_by(column):
+            conn = sqlite3.connect('game_system.db')
+            c = conn.cursor()
+            query = f"SELECT id, name, email, role FROM users ORDER BY {column}"
+            c.execute(query)
+            users = c.fetchall()
+            conn.close()
+
+            sorted_users_window = tk.Toplevel()
+            sorted_users_window.title("Сортированные пользователи")
+
+            tk.Label(sorted_users_window, text="Список пользователей:", font=("Arial", 14)).pack(pady=10)
+            for user in users:
+                user_info = f"ID: {user[0]}, Имя: {user[1]}, Email: {user[2]}, Роль: {user[3]}"
+                tk.Label(sorted_users_window, text=user_info, font=("Arial", 12)).pack(pady=5)
+
+            sorted_users_window.mainloop()
+
+        # Кнопки админ-панели
+        tk.Button(admin_panel_window, text="Все пользователи", command=view_all_users, font=("Arial", 12)).pack(pady=10)
+        tk.Button(admin_panel_window, text="Удалить пользователя", command=delete_user, font=("Arial", 12)).pack(
+            pady=10)
+        tk.Button(admin_panel_window, text="Обнулить пользователя", command=reset_user, font=("Arial", 12)).pack(
+            pady=10)
+        tk.Button(admin_panel_window, text="Сортировать по имени", command=lambda: sort_users_by('name'),
+                  font=("Arial", 12)).pack(pady=5)
+        tk.Button(admin_panel_window, text="Сортировать по роли", command=lambda: sort_users_by('role'),
+                  font=("Arial", 12)).pack(pady=5)
+
+        admin_panel_window.mainloop()
+
+        def show_user_stats(user_id):
+            # Функция для отображения статистики пользователя
+            conn = sqlite3.connect('game_system.db')
+            c = conn.cursor()
+            c.execute("SELECT name, email, role FROM users WHERE id=?", (user_id,))
+            user_info = c.fetchone()
+            c.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,))
+            session_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM purchases WHERE user_id=?", (user_id,))
+            purchase_count = c.fetchone()[0]
+            conn.close()
+
+            stats_window = tk.Toplevel()
+            stats_window.title(f"Статистика пользователя {user_info[0]}")
+
+            tk.Label(stats_window, text=f"Имя: {user_info[0]}", font=("Arial", 14)).pack(pady=5)
+            tk.Label(stats_window, text=f"Email: {user_info[1]}", font=("Arial", 12)).pack(pady=5)
+            tk.Label(stats_window, text=f"Роль: {user_info[2]}", font=("Arial", 12)).pack(pady=5)
+            tk.Label(stats_window, text=f"Количество сессий: {session_count}", font=("Arial", 12)).pack(pady=5)
+            tk.Label(stats_window, text=f"Количество покупок: {purchase_count}", font=("Arial", 12)).pack(pady=5)
+
+        # Получаем список всех пользователей
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT id, name FROM users")
+        users = c.fetchall()
+        conn.close()
+
+        import functools
+
+        # Создаем кнопки для каждого пользователя
+        for user in users:
+            user_id, name = user
+            # Используем functools.partial для правильного захвата user_id в лямбде
+            button = tk.Button(admin_panel_window, text=f"Статистика {name}",
+                               command=functools.partial(show_user_stats, user_id), font=("Arial", 12))
+            button.pack(pady=10)
+
+        admin_panel_window.mainloop()
+
+    menu_window = tk.Tk()
+    menu_window.title("Главное меню")
+
+    total_time = calculate_total_time()
+    tk.Label(menu_window, text=f"Добро пожаловать, {user_name}!", font=("Arial", 16)).pack(pady=10)
+    tk.Label(menu_window, text=f"Общее время в игре: {total_time}", font=("Arial", 12)).pack(pady=10)
+
+    tk.Button(menu_window, text="Начать игру", command=start_game, font=("Arial", 12)).pack(pady=10)
+    tk.Button(menu_window, text="История Сессий", command=show_sessions, font=("Arial", 12)).pack(pady=10)
+    tk.Button(menu_window, text="Магазин", command=open_shop, font=("Arial", 12)).pack(pady=10)
+    tk.Button(menu_window, text="Покупки", command=show_purchases, font=("Arial", 12)).pack(pady=10)
+    tk.Button(menu_window, text="Админ", command=admin_login, font=("Arial", 12)).pack(pady=10)  # Кнопка администратора
+    tk.Button(menu_window, text="Аналитик", command=open_analytics_panel, font=("Arial", 12)).pack(pady=20)
+    tk.Button(menu_window, text="Обновить", command=refresh_menu, font=("Arial", 12)).pack(pady=10)
+    tk.Button(menu_window, text="Выйти", command=menu_window.destroy, font=("Arial", 12)).pack(pady=10)
+
+    menu_window.mainloop()
+
+
+def open_analytics_panel():
+    # Окно для ввода пароля
+    password_window = tk.Toplevel()
+    password_window.title("Введите пароль")
+    password_window.geometry("300x150")
+
+    def verify_password():
+        password = password_entry.get()
+        if password == "password24#%":
+            password_window.destroy()
+            analytics_panel()  # Открываем панель аналитика
+        else:
+            messagebox.showerror("Ошибка", "Неверный пароль!")
+
+    # Заголовок и поле ввода пароля
+    tk.Label(password_window, text="Введите пароль для доступа", font=("Arial", 14)).pack(pady=10)
+    password_entry = tk.Entry(password_window, show="*", font=("Arial", 12), width=20)
+    password_entry.pack(pady=10)
+
+    # Кнопка подтверждения
+    tk.Button(password_window, text="Подтвердить", command=verify_password, font=("Arial", 12)).pack(pady=10)
+
+    password_window.mainloop()
+
+# Функция analytics_panel
+def analytics_panel():
+    # Окно для аналитика
+    analytics_window = tk.Toplevel()
+    analytics_window.title("Аналитика")
+
+    # Заголовок
+    tk.Label(analytics_window, text="Сравнение пользователей", font=("Arial", 16)).pack(pady=10)
+
+    # Получаем список всех пользователей
+    conn = sqlite3.connect('game_system.db')
+    c = conn.cursor()
+    c.execute("SELECT id, name FROM users")
+    users = c.fetchall()
+    conn.close()
+
+    # Переменная для хранения выбранных пользователей
+    selected_users = []
+
+    def compare_users():
+        if len(selected_users) == 0:
+            messagebox.showwarning("Ошибка", "Пожалуйста, выберите хотя бы одного пользователя для сравнения.")
+            return
+
+        # Окно для отображения информации о выбранных пользователях
+        compare_window = tk.Toplevel()
+        compare_window.title("Сравнение пользователей")
+
+        for user_id in selected_users:
+            # Получаем информацию о пользователе
+            conn = sqlite3.connect('game_system.db')
+            c = conn.cursor()
+            c.execute("SELECT name, email, role FROM users WHERE id=?", (user_id,))
+            user_info = c.fetchone()
+            c.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,))
+            session_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM purchases WHERE user_id=?", (user_id,))
+            purchase_count = c.fetchone()[0]
+            conn.close()
+
+            # Отображаем информацию о пользователе
+            user_text = f"Имя: {user_info[0]}\nEmail: {user_info[1]}\nРоль: {user_info[2]}\n"
+            user_text += f"Количество сессий: {session_count}\nКоличество покупок: {purchase_count}\n"
+            tk.Label(compare_window, text=user_text, font=("Arial", 12)).pack(pady=10)
+
+    # Кнопки для выбора пользователей
+    def on_select(user_id):
+        if user_id not in selected_users:
+            selected_users.append(user_id)
+        else:
+            selected_users.remove(user_id)
+
+    import functools
+
+    # Создаем кнопки для каждого пользователя
+    for user in users:
+        user_id, name = user
+        # Используем functools.partial для правильного захвата user_id в лямбде
+        button = tk.Button(analytics_window, text=f"Выбрать {name}",
+                           command=functools.partial(on_select, user_id), font=("Arial", 12))
+        button.pack(pady=5)
+
+    # Кнопка для сравнения выбранных пользователей
+    tk.Button(analytics_window, text="Сравнить", command=compare_users, font=("Arial", 12)).pack(pady=20)
+
+    import matplotlib.pyplot as plt
+
+    def plot_user_sessions():
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        c.execute("SELECT name, COUNT(*) FROM users JOIN sessions ON users.id = sessions.user_id GROUP BY name")
+        data = c.fetchall()
+        conn.close()
+
+        names = [row[0] for row in data]
+        session_counts = [row[1] for row in data]
+
+        plt.figure(figsize=(10, 6))
+        plt.bar(names, session_counts, color='skyblue')
+        plt.xlabel('Пользователи')
+        plt.ylabel('Количество сессий')
+        plt.title('Количество сессий по пользователям')
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
+
+    tk.Button(analytics_window, text="График сессий", command=plot_user_sessions, font=("Arial", 12)).pack(pady=10)
+
+    analytics_window.mainloop()
+
+
+# Регистрация пользователя
+def register_user():
+    def save_user():
+        email = entry_email.get()
+        password = entry_password.get()
+        name = entry_name.get()
+
+        if not email or not password or not name:
+            messagebox.showerror("Ошибка", "Пожалуйста, заполните все поля.")
+            return
+
+        hashed_password = hashlib.sha256(password.encode()).hexdigest()
+
+        conn = sqlite3.connect('game_system.db')
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
+                      (email, hashed_password, name))
+            conn.commit()
+            messagebox.showinfo("Успех", "Пользователь зарегистрирован!")
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Ошибка", "Пользователь с таким email уже существует.")
+        finally:
+            conn.close()
+
+        register_window.destroy()
+
+    register_window = tk.Tk()
+    register_window.title("Регистрация")
+
+    tk.Label(register_window, text="Email:", font=("Arial", 12)).grid(row=0, column=0, pady=5, padx=5)
+    entry_email = tk.Entry(register_window, font=("Arial", 12))
+    entry_email.grid(row=0, column=1, pady=5, padx=5)
+
+    tk.Label(register_window, text="Пароль:", font=("Arial", 12)).grid(row=1, column=0, pady=5, padx=5)
+    entry_password = tk.Entry(register_window, show="*", font=("Arial", 12))
+    entry_password.grid(row=1, column=1, pady=5, padx=5)
+
+    tk.Label(register_window, text="Имя:", font=("Arial", 12)).grid(row=2, column=0, pady=5, padx=5)
+    entry_name = tk.Entry(register_window, font=("Arial", 12))
+    entry_name.grid(row=2, column=1, pady=5, padx=5)
+
+    tk.Button(register_window, text="Зарегистрироваться", command=save_user, font=("Arial", 12)).grid(
+        row=3, column=0, columnspan=2, pady=10)
+
+
+# Основная функция
+def main():
+    create_database()
+
+    window = tk.Tk()
+    window.title("Система учета и анализа в онлайн-игре")
+
+    tk.Label(window, text="Добро пожаловать в систему учета и анализа в онлайн игре!", font=("Arial", 16)).pack(pady=20)
+
+    tk.Button(window, text="Регистрация", command=register_user, font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Войти", command=login, font=("Arial", 12)).pack(pady=10)
+
+    window.mainloop()
+
+
+if __name__ == "__main__":
+    main()
